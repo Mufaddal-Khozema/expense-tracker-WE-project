@@ -117,10 +117,68 @@ func (r *Repository[T]) SoftDelete(id int64) error {
 	return err
 }
 
-func (r *Repository[T]) List() ([]T, error) {
+
+type ListOptions struct {
+	where   []string
+	args    []any
+	orderBy string
+	limit   *int
+	offset  *int
+}
+
+type ListOption func(*ListOptions)
+
+func WithWhere(condition string, args ...any) ListOption {
+	return func(o *ListOptions) {
+		o.where = append(o.where, condition)
+		o.args = append(o.args, args...)
+	}
+}
+
+func WithOrderBy(order string) ListOption {
+	return func(o *ListOptions) {
+		o.orderBy = order
+	}
+}
+
+func WithLimit(limit int) ListOption {
+	return func(o *ListOptions) {
+		o.limit = &limit
+	}
+}
+
+func WithOffset(offset int) ListOption {
+	return func(o *ListOptions) {
+		o.offset = &offset
+	}
+}
+
+func (r *Repository[T]) List(opts ...ListOption) ([]T, error) {
 	var items []T
+    o := &ListOptions{}
+    for _, opt := range opts {
+        opt(o)
+    }
+    
 	query := fmt.Sprintf("SELECT * FROM %s WHERE is_deleted = 0", r.tableName)
-	err := r.db.Select(&items, query)
+
+    if len(o.where) > 0 {
+        query += " AND " + strings.Join(o.where, " AND ")
+    }
+
+    if o.orderBy != "" {
+        query += " ORDER BY " + o.orderBy
+    }
+
+    if o.limit != nil {
+        query += fmt.Sprintf(" LIMIT %d", *o.limit)
+    }
+
+    if o.offset != nil {
+        query += fmt.Sprintf(" OFFSET %d", *o.offset)
+    }
+
+	err := r.db.Select(&items, query, o.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +411,9 @@ func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	catRepo := NewRepository[Category](db, "categories", "id")
-	categories, err := catRepo.List()
+	categories, err := catRepo.List(
+        WithOrderBy("sort_order"),
+    )
 	if err != nil {
 		log.Printf("[DB][ERROR] %v\n", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -384,7 +444,10 @@ func ReorderCategoryHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "OK",
+	})
 }
 
 // LoggingMiddleware wraps handlers to log requests

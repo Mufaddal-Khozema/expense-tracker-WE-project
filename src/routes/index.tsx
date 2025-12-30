@@ -22,7 +22,7 @@ export const Route = createFileRoute('/')({
 })
 
 function App() {
-  const {data: categories, isLoading} = useCategories()
+  const {data: categories, isLoading, refetch} = useCategories()
   const createCategoryMutation = useCreateCategory()
   const updateCategoryMutation = useUpdateCategory()
   const reorderCategoryMutation = useReorderCategory()
@@ -48,7 +48,6 @@ function App() {
             >
               {table.getIsAllRowsExpanded() ? <ChevronDown className="w-6 h-6" /> : <ChevronRight className="w-6 h-6" />}
             </button>{' '}
-            First Name
           </>
         ),
         cell: ({ row, getValue }) => (
@@ -142,11 +141,15 @@ function App() {
       //setData((data) => {
         const oldIndex = dataIds.indexOf(active.id);
         const newIndex = dataIds.indexOf(over.id);
-        return reorderCategoryMutation.mutate({
-          id: active.id, 
-          oldIndex, 
-          newIndex
-        }); //this is just a splice util
+        async function reorder() {
+          await reorderCategoryMutation.mutateAsync({
+            id: Number(active.id), 
+            oldIndex, 
+            newIndex
+          }); 
+          refetch()
+        }
+        reorder()
       //});
     }
   }
