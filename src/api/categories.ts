@@ -31,3 +31,14 @@ export function updateCategory(input: {
     body: JSON.stringify(input),
   });
 }
+
+export function reorderCategory(input: {
+  id: number;
+  oldIndex?: number;
+  newIndex?: number;
+}) {
+  return api<Category>(`/categories/reorder/${input.id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}

@@ -1,44 +1,31 @@
 import { createFileRoute } from '@tanstack/react-router'
 import logo from '../logo.svg'
-import {flexRender, getCoreRowModel, getExpandedRowModel, useReactTable} from '@tanstack/react-table'
-import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {flexRender, getCoreRowModel, getExpandedRowModel, useReactTable, type Row} from '@tanstack/react-table'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useReducer, useState } from 'react'
+import { useMemo, useReducer, useState, type CSSProperties } from 'react'
 import { AddCategory } from '@/components/category/add-category'
 import { useCreateCategory } from '@/hooks/use-create-category'
 import { useCategories } from '@/hooks/use-categories'
 import { useUpdateCategory } from '@/hooks/use-update-category'
 import { Input } from '@/components/ui/input'
+import { EditableField } from '@/components/ui/editable-feild'
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import type { Category } from '@/api/categories'
+import { closestCenter, DndContext, KeyboardSensor, MouseSensor, TouchSensor, useSensor, useSensors, type DragEndEvent, type UniqueIdentifier } from '@dnd-kit/core'
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { useReorderCategory } from '@/hooks/use-reorder-category'
 
 export const Route = createFileRoute('/')({
   component: App,
 })
 
-// const data = [
-//   {
-//     name: "food",
-//     amount: 10000,
-//     categories: [
-//       {
-//         name: "chicken",
-//         amount: 70000
-//       },
-//       {
-//         name: "other",
-//         amount: 3000
-//       }
-//     ]
-//   },
-//   {
-//     name: "bike",
-//     amount: 10000,
-//   }
-// ]
-
 function App() {
   const {data: categories, isLoading} = useCategories()
   const createCategoryMutation = useCreateCategory()
   const updateCategoryMutation = useUpdateCategory()
+  const reorderCategoryMutation = useReorderCategory()
 
   const table = useReactTable({
     data: categories??[],
@@ -102,19 +89,15 @@ function App() {
       { accessorKey: "name", size: 400 },
       { 
         accessorKey: "amount", 
-        cell: ({ cell, row }) => {
-          const [value, setValue] = useState<number>(cell.getValue())
-          return (
-            <Input
-              value={value}
-              onChange={(e) => setValue(Number(e.target.value))}
-              onBlur={() => updateCategoryMutation.mutate({ 
-                id: row.original.id, 
-                amount: value 
-              })}
-            />
-          )
-        },
+        cell: ({ cell, row }) => (
+          <EditableField 
+            onBlur={(value) => updateCategoryMutation.mutate({ 
+              id: row.original.id, 
+              amount: Number(value)
+            })}
+            value={cell.getValue()}
+          />
+        ),
         size: 400 
       }
     ],
@@ -123,8 +106,64 @@ function App() {
     getSubRows: (row) => row.categories,
   });
 
+  // Row Component
+  const DraggableRow = ({ row }: { row: Row<Category> }) => {
+    const { transform, transition, setNodeRef, isDragging, attributes, listeners } = useSortable({
+      id: row.original.id,
+    })
+
+    const style: CSSProperties = {
+      transform: CSS.Transform.toString(transform), //let dnd-kit do its thing
+      transition: transition,
+      opacity: isDragging ? 0.8 : 1,
+      zIndex: isDragging ? 1 : 0,
+      position: 'relative',
+    }
+    return (
+      // connect row ref to dnd-kit, apply important styles
+      <TableRow ref={setNodeRef} style={style} {...attributes} {...listeners}>
+        {row.getVisibleCells().map((cell) => (
+          <TableCell key={cell.id} style={{ width: cell.column.getSize() }}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
+      </TableRow>
+    )
+  }
+
+  const dataIds = useMemo<UniqueIdentifier[]>(
+    () => categories?.map(({ id }) => id) ?? [],
+    [categories]
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (active && over && active.id !== over.id) {
+      //setData((data) => {
+        const oldIndex = dataIds.indexOf(active.id);
+        const newIndex = dataIds.indexOf(over.id);
+        return reorderCategoryMutation.mutate({
+          id: active.id, 
+          oldIndex, 
+          newIndex
+        }); //this is just a splice util
+      //});
+    }
+  }
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, {}),
+    useSensor(TouchSensor, {}),
+    useSensor(KeyboardSensor, {})
+  );
 
   return (
+    <DndContext
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis]}
+      onDragEnd={handleDragEnd}
+      sensors={sensors}
+    >
     <main className="w-full h-full overflow-hidden">
       <section className="p-5 space-y-5">
         <h1 className="text-3xl">Categories</h1>
@@ -155,25 +194,21 @@ function App() {
             ))}
           </TableHeader>
           <TableBody>
+            <SortableContext
+              items={dataIds}
+              strategy={verticalListSortingStrategy}
+            >
             {table.getRowModel().rows.map((row) => {
               return (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => {
-                    return (
-                      <td key={cell.id}>
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext(),
-                        )}
-                      </td>
-                    )
-                  })}
-                </TableRow>
+                <DraggableRow key={row.id} row={row} />
               )
             })}
+            </SortableContext>
           </TableBody>
         </Table>
       </section>
     </main>
+    </DndContext>
   )
 }
+

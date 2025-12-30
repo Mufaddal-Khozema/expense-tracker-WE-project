@@ -127,15 +127,64 @@ func (r *Repository[T]) List() ([]T, error) {
 	return items, nil
 }
 
+func (r *Repository[T]) Reorder(id int64, oldIndex, newIndex int) error {
+	if oldIndex == newIndex {
+        return nil
+	}
+
+	// Determine shift direction
+	var shiftOp string
+	var args []interface{}
+
+	if oldIndex < newIndex {
+		// Moving down: decrease sort_order of intervening rows
+		shiftOp = "- 1"
+		args = append(args, oldIndex+1, newIndex)
+	} else {
+		// Moving up: increase sort_order of intervening rows
+		shiftOp = "+ 1"
+		args = append(args, newIndex, oldIndex-1)
+	}
+
+	// 1️⃣ Shift all affected rows
+	shiftQuery := fmt.Sprintf(`
+		UPDATE %s
+		SET sort_order = sort_order %s, updated_at = CURRENT_TIMESTAMP
+		WHERE is_deleted = 0 AND sort_order BETWEEN ? AND ? AND id != ?
+	`, r.tableName, shiftOp)
+
+	_, err := r.db.Exec(shiftQuery, append(args, id)...)
+	if err != nil {
+		return err
+	}
+
+	// 2️⃣ Set the new position of the moved row
+	updateQuery := fmt.Sprintf(`
+		UPDATE %s
+		SET sort_order = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND is_deleted = 0
+	`, r.tableName)
+
+	_, err = r.db.Exec(updateQuery, newIndex, id)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DB][OK] Reordered %s id=%d from %d -> %d", r.tableName, id, oldIndex, newIndex)
+	return nil
+}
+
+
 // Category represents a category in the database
 type Category struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-    ParentID  *int64 `db:"parent_id" json:"parent_id,omitempty"`
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+    ParentID  *int64   `db:"parent_id" json:"parent_id,omitempty"`
 	Amount    *float64 `json:"amount"`
-	CreatedAt string `db:"created_at" json:"created_at"`
-	UpdatedAt string `db:"updated_at" json:"updated_at"`
-	IsDeleted string `db:"is_deleted" json:"is_deleted"`
+	SortOrder int64    `db:"sort_order" json:"sort_order"`
+	CreatedAt string   `db:"created_at" json:"created_at"`
+	UpdatedAt string   `db:"updated_at" json:"updated_at"`
+	IsDeleted string   `db:"is_deleted" json:"is_deleted"`
 }
 
 // CategoryRequest represents the JSON request for creating a category
@@ -150,6 +199,11 @@ type UpdateCategoryRequest struct {
 	Name     string `json:"name"`
 	Amount   *float64 `json:"amount"`
 	ParentID *int64 `json:"parent_id,omitempty"`
+}
+
+type ReorderRequest struct {
+	OldIndex int `json:"oldIndex"`
+	NewIndex int `json:"newIndex"`
 }
 
 // LogRequest logs HTTP requests
@@ -310,6 +364,29 @@ func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(categories)
 }
 
+func ReorderCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+    id, err := strconv.ParseInt(idStr, 10, 64)
+    if err != nil {
+        http.Error(w, "invalid id", http.StatusBadRequest)
+        return
+    }
+
+    var req ReorderRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "invalid body", http.StatusBadRequest)
+        return
+    }
+
+	catRepo := NewRepository[Category](db, "categories", "id")
+    if err := catRepo.Reorder(id, req.OldIndex, req.NewIndex); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
+}
+
 // LoggingMiddleware wraps handlers to log requests
 func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +425,7 @@ func main() {
 	
 	// Initialize database
 	db, err = sqlx.Connect("sqlite3", "db/app.db")
+	//db, err = sqlx.Open("sqlite3", "file:db.sqlite?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -388,6 +466,20 @@ func main() {
 				w.WriteHeader(http.StatusNoContent) // 204 No Content
 			case http.MethodPut:
 				HandleUpdateCategoryByID(w, r)
+
+			default:
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	http.HandleFunc("/categories/reorder/{id}", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w)
+		switch r.Method {
+			case http.MethodOptions:
+				w.WriteHeader(http.StatusNoContent) // 204 No Content
+			case http.MethodPut:
+				ReorderCategoryHandler(w, r)
+
 			default:
 				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
