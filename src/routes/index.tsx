@@ -7,6 +7,8 @@ import { useReducer, useState } from 'react'
 import { AddCategory } from '@/components/category/add-category'
 import { useCreateCategory } from '@/hooks/use-create-category'
 import { useCategories } from '@/hooks/use-categories'
+import { useUpdateCategory } from '@/hooks/use-update-category'
+import { Input } from '@/components/ui/input'
 
 export const Route = createFileRoute('/')({
   component: App,
@@ -35,6 +37,9 @@ export const Route = createFileRoute('/')({
 
 function App() {
   const {data: categories, isLoading} = useCategories()
+  const createCategoryMutation = useCreateCategory()
+  const updateCategoryMutation = useUpdateCategory()
+
   const table = useReactTable({
     data: categories??[],
     columns: [
@@ -95,7 +100,23 @@ function App() {
         size: 120, // small
       },
       { accessorKey: "name", size: 400 },
-      { accessorKey: "amount", size: 400 }
+      { 
+        accessorKey: "amount", 
+        cell: ({ cell, row }) => {
+          const [value, setValue] = useState<number>(cell.getValue())
+          return (
+            <Input
+              value={value}
+              onChange={(e) => setValue(Number(e.target.value))}
+              onBlur={() => updateCategoryMutation.mutate({ 
+                id: row.original.id, 
+                amount: value 
+              })}
+            />
+          )
+        },
+        size: 400 
+      }
     ],
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),

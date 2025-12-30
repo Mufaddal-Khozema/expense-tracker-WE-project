@@ -1,31 +1,154 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
-
+	"strconv"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/jmoiron/sqlx"
 )
 
 const PORT = 4003
 
-var db *sql.DB
+var db *sqlx.DB
+
+
+// All your tables should implement this interface
+type Entity interface {}
+
+type Repository[T Entity] struct {
+	db        *sqlx.DB
+	tableName string
+	idColumn  string
+}
+
+// Constructor
+func NewRepository[T Entity](db *sqlx.DB, tableName string, idColumn string) *Repository[T] {
+	return &Repository[T]{db: db, tableName: tableName, idColumn: idColumn}
+}
+
+// Create inserts a new row, returns last insert ID
+func (r *Repository[T]) Create(fields map[string]interface{}) (int64, error) {
+	cols := []string{}
+	vals := []interface{}{}
+	placeholders := []string{}
+
+	for col, val := range fields {
+		cols = append(cols, col)
+		vals = append(vals, val)
+		placeholders = append(placeholders, "?")
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		r.tableName,
+		strings.Join(cols, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	res, err := r.db.Exec(query, vals...)
+	if err != nil {
+		return 0, err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	log.Printf("[DB][OK] inserted into %s id=%d", r.tableName, id)
+	return id, nil
+}
+
+// GetByID fetches a single row by ID
+func (r *Repository[T]) GetByID(id int64) (*T, error) {
+	var t T
+
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ? AND is_deleted = 0", r.tableName, r.idColumn)
+	err := r.db.Get(&t, query, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Scan into struct using sql tags or a library like sqlx
+	// Example: sqlx.Get(&t, query, id) if using sqlx
+	return &t, nil 
+}
+
+// Update performs partial update
+func (r *Repository[T]) Update(id int64, updates map[string]interface{}) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	setClauses := []string{}
+	args := []interface{}{}
+
+	for col, val := range updates {
+		setClauses = append(setClauses, fmt.Sprintf("%s = ?", col))
+		args = append(args, val)
+	}
+
+	setClauses = append(setClauses, "updated_at = CURRENT_TIMESTAMP")
+	args = append(args, id)
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ? AND is_deleted = 0",
+		r.tableName,
+		strings.Join(setClauses, ", "),
+		r.idColumn,
+	)
+
+	_, err := r.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DB][OK] updated %s id=%d", r.tableName, id)
+	return nil
+}
+
+// SoftDelete marks a row as deleted
+func (r *Repository[T]) SoftDelete(id int64) error {
+	query := fmt.Sprintf("UPDATE %s SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE %s = ?", r.tableName, r.idColumn)
+	_, err := r.db.Exec(query, id)
+	return err
+}
+
+func (r *Repository[T]) List() ([]T, error) {
+	var items []T
+	query := fmt.Sprintf("SELECT * FROM %s WHERE is_deleted = 0", r.tableName)
+	err := r.db.Select(&items, query)
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 // Category represents a category in the database
 type Category struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	ParentID *int64 `json:"parent_id,omitempty"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+    ParentID  *int64 `db:"parent_id" json:"parent_id,omitempty"`
+	Amount    *float64 `json:"amount"`
+	CreatedAt string `db:"created_at" json:"created_at"`
+	UpdatedAt string `db:"updated_at" json:"updated_at"`
+	IsDeleted string `db:"is_deleted" json:"is_deleted"`
 }
 
 // CategoryRequest represents the JSON request for creating a category
 type CategoryRequest struct {
 	Name     string `json:"name"`
+	ParentID *int64 `json:"parent_id,omitempty"`
+	Amount   *float64 `json:"amount"`
+}
+
+type UpdateCategoryRequest struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Amount   *float64 `json:"amount"`
 	ParentID *int64 `json:"parent_id,omitempty"`
 }
 
@@ -38,7 +161,7 @@ func LogRequest(ip, method, path string, status int) {
 // CORS middleware
 func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
     w.Header().Set("Access-Control-Allow-Credentials", "true")
 }
@@ -72,10 +195,37 @@ func InsertCategory(name string, parentID *int64) (int64, error) {
 	return id, nil
 }
 
+func UpdateCategory(id int64, name string, amount *float64, parentID *int64) error {
+	catRepo := NewRepository[Category](db, "categories", "id")
+
+	updates := map[string]interface{}{}
+
+	if name != "" {
+		updates["name"] = name
+	}
+	if amount != nil {
+		updates["amount"] = *amount
+	}
+	if parentID != nil {
+		updates["parent_id"] = *parentID
+	}
+
+	if len(updates) == 0 {
+		// nothing to update
+		return nil
+	}
+
+	err := catRepo.Update(id, updates)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DB][OK] update_category(id=%d, updates=%+v)\n", id, updates)
+	return nil
+}
+
 // HandleCreateCategory handles POST /category requests
 func HandleCreateCategory(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
-	
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -110,36 +260,50 @@ func HandleCreateCategory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func HandleUpdateCategoryByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	var req UpdateCategoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := UpdateCategory(id, req.Name, req.Amount, req.ParentID); err != nil {
+		log.Printf("[DB][ERROR] %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "OK",
+	})
+}
+
 // HandleGetCategories handles GET /categories requests
 func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
-	
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	rows, err := db.Query("SELECT id, name, parent_id FROM categories WHERE is_deleted = 0")
+	catRepo := NewRepository[Category](db, "categories", "id")
+	categories, err := catRepo.List()
 	if err != nil {
 		log.Printf("[DB][ERROR] %v\n", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
-	}
-	defer rows.Close()
-
-	var categories []Category
-	for rows.Next() {
-		var cat Category
-		var parentID sql.NullInt64
-		err := rows.Scan(&cat.ID, &cat.Name, &parentID)
-		if err != nil {
-			log.Printf("[DB][ERROR] %v\n", err)
-			continue
-		}
-		if parentID.Valid {
-			cat.ParentID = &parentID.Int64
-		}
-		categories = append(categories, cat)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -183,7 +347,7 @@ func main() {
 	var err error
 	
 	// Initialize database
-	db, err = sql.Open("sqlite3", "db/app.db")
+	db, err = sqlx.Connect("sqlite3", "db/app.db")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -212,6 +376,18 @@ func main() {
 				HandleCreateCategory(w, r)
 			case http.MethodGet:
 				HandleGetCategories(w, r)
+			default:
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	http.HandleFunc("/categories/{id}", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w)
+		switch r.Method {
+			case http.MethodOptions:
+				w.WriteHeader(http.StatusNoContent) // 204 No Content
+			case http.MethodPut:
+				HandleUpdateCategoryByID(w, r)
 			default:
 				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}

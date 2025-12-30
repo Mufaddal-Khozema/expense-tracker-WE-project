@@ -10,7 +10,7 @@ export function createCategory(input: {
   name: string;
   parent_id?: number;
 }) {
-  return api<Category>("/category", {
+  return api<Category>("/categories", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -18,4 +18,16 @@ export function createCategory(input: {
 
 export function getCategories() {
   return api<Category[]>("/categories");
+}
+
+export function updateCategory(input: {
+  id: number;
+  name?: string;
+  amount?: number;
+  parent_id?: number;
+}) {
+  return api<Category>(`/categories/${input.id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
 }
