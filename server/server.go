@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"strconv"
+	"errors"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/jmoiron/sqlx"
 )
@@ -264,18 +265,60 @@ type ReorderRequest struct {
 	NewIndex int `json:"newIndex"`
 }
 
+type CreateAccountRequest struct {
+	Name     string   `json:"name"`
+	Balance   *float64 `json:"balance,omitempty"`
+}
+
+type UpdateAccountRequest struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Amount   *float64 `json:"amount"`
+	ParentID *int64 `json:"parent_id,omitempty"`
+}
+
+type MethodHandler map[string]http.HandlerFunc
+
+type CreateFunc[T any] func(req T) (int64, error)
+type ValidateFunc[T any] func(req T) error
+
 // LogRequest logs HTTP requests
 func LogRequest(ip, method, path string, status int) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	log.Printf("[%s] %s %s %s -> %d\n", now, ip, method, path, status)
 }
 
-// CORS middleware
-func enableCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-    w.Header().Set("Access-Control-Allow-Credentials", "true")
+func HandleCreate[T any](
+	w http.ResponseWriter,
+	r *http.Request,
+	req *T,
+	validate ValidateFunc[T],
+	create CreateFunc[T],
+) {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if validate != nil {
+		if err := validate(*req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	id, err := create(*req)
+	if err != nil {
+		log.Printf("[DB][ERROR] %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "OK",
+		"id":     id,
+	})
 }
 
 // InsertCategory inserts a new category into the database
@@ -336,40 +379,41 @@ func UpdateCategory(id int64, name string, amount *float64, parentID *int64) err
 	return nil
 }
 
+func CreateAccount(name string, balance *float64) (int64, error) {
+	var id int64
+
+	result, err := db.Exec("INSERT INTO accounts (name, balance) VALUES (?, ?)", name, *balance)
+	if err != nil {
+		return 0, err
+	}
+	id, err = result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	log.Printf("[DB] insert_account(name=\"%s\", balance=%v)\n", name, balance)
+	log.Printf("[DB][OK] account inserted with id=%d\n", id)
+	return id, nil
+}
+
 // HandleCreateCategory handles POST /category requests
 func HandleCreateCategory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req CategoryRequest
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
 
-	if req.Name == "" {
-		http.Error(w, "Name is required", http.StatusBadRequest)
-		return
-	}
-
-	id, err := InsertCategory(req.Name, req.ParentID)
-	if err != nil {
-		log.Printf("[DB][ERROR] %v\n", err)
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	resp := map[string]interface{}{
-		"status": "OK",
-		"id":     id,
-	}
-
-	json.NewEncoder(w).Encode(resp)
+	HandleCreate(
+		w,
+		r,
+		&req,
+		func(r CategoryRequest) error {
+			if r.Name == "" {
+				return errors.New("name is required")
+			}
+			return nil
+		},
+		func(r CategoryRequest) (int64, error) {
+			return InsertCategory(r.Name, r.ParentID)
+		},
+	)
 }
 
 func HandleUpdateCategoryByID(w http.ResponseWriter, r *http.Request) {
@@ -450,9 +494,28 @@ func ReorderCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func HandleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	var req CreateAccountRequest
+
+	HandleCreate(
+		w,
+		r,
+		&req,
+		func(r CreateAccountRequest) error {
+			if r.Name == "" {
+				return errors.New("name is required")
+			}
+			return nil
+		},
+		func(r CreateAccountRequest) (int64, error) {
+			return CreateAccount(r.Name, r.Balance)
+		},
+	)
+}
+
 // LoggingMiddleware wraps handlers to log requests
-func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Create a custom response writer to capture status code
 		lrw := &loggingResponseWriter{
 			ResponseWriter: w,
@@ -470,7 +533,37 @@ func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		
 		LogRequest(ip, r.Method, r.URL.Path, lrw.statusCode)
 		log.Printf("Request completed in %v\n", time.Since(start))
-	}
+	})
+}
+
+func CORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func Methods(handlers MethodHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h, ok := handlers[r.Method]; ok {
+			h(w, r)
+			return
+		}
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	})
+}
+
+func WithMiddleware(h http.Handler) http.Handler {
+	return CORSMiddleware(LoggingMiddleware(h))
 }
 
 type loggingResponseWriter struct {
@@ -507,58 +600,43 @@ func main() {
 		log.Fatal(err)
 	}
 
+	mux := http.NewServeMux()
+
 	// Set up HTTP routes
-	http.HandleFunc("/categories", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		switch r.Method {
-			case http.MethodOptions:
-				w.WriteHeader(http.StatusNoContent) // 204 No Content
-			case http.MethodPost:
-				HandleCreateCategory(w, r)
-			case http.MethodGet:
-				HandleGetCategories(w, r)
-			default:
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		}
+	mux.Handle("/categories", Methods(MethodHandler{
+		http.MethodGet: HandleGetCategories,
+		http.MethodPost: HandleCreateCategory,
 	}))
 
-	http.HandleFunc("/categories/{id}", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		switch r.Method {
-			case http.MethodOptions:
-				w.WriteHeader(http.StatusNoContent) // 204 No Content
-			case http.MethodPut:
-				HandleUpdateCategoryByID(w, r)
-
-			default:
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		}
+	mux.Handle("/categories/{id}", Methods(MethodHandler{
+		http.MethodPut: HandleUpdateCategoryByID,
+		http.MethodPost: HandleCreateCategory,
 	}))
 
-	http.HandleFunc("/categories/reorder/{id}", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		switch r.Method {
-			case http.MethodOptions:
-				w.WriteHeader(http.StatusNoContent) // 204 No Content
-			case http.MethodPut:
-				ReorderCategoryHandler(w, r)
-
-			default:
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		}
+	mux.Handle("/categories/reorder/{id}", Methods(MethodHandler{
+		http.MethodPut: ReorderCategoryHandler,
 	}))
+
+	// Set up HTTP routes
+	mux.Handle("/accounts", Methods(MethodHandler{
+		http.MethodPost: HandleCreateAccount,
+		//http.MethodGet: HandleGetAccount,
+	}))
+
+	//mux.Handle("/accounts/{id}", Methods(MethodHandler{
+	//	http.MethodPut: HandleUpdateAccount,
+	//}))
 
 	// Handle 404 for all other routes
-	http.HandleFunc("/", LoggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		http.Error(w, "Not Found", http.StatusNotFound)
-	}))
+	mux.Handle("/", http.NotFoundHandler())
+
+	handler := WithMiddleware(mux)
 
 	// Start server
 	addr := fmt.Sprintf(":%d", PORT)
 	log.Printf("Server running on http://localhost:%d\n", PORT)
 	
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal(err)
 	}
 }

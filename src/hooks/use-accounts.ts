@@ -1,0 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
+import { getCategories } from "@/api/categories";
+import { getAccounts } from "@/api/account";
+
+export function useAccounts() {
+  return useQuery({
+    queryKey: ["accounts"],
+    queryFn: getAccounts,
+  });
+}
