@@ -3,8 +3,8 @@ import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { ClipboardType, Home, Menu, Network, Table, X } from 'lucide-react'
 import { useAccounts } from '@/hooks/use-accounts'
-import { Button } from '@/components/ui/button'
 import { useCreateAccount } from '@/hooks/use-create-account'
+import { AddAccount } from './account/add-account'
 
 export default function Header() {
   const [isOpen, setIsOpen] = useState(false)
@@ -32,7 +32,6 @@ export default function Header() {
 
 export const SidebarList = ({setIsOpen}: {setIsOpen?: (open: boolean) => void}) => {
   const {data: accounts, isLoading, refetch} = useAccounts()
-  const createAccountMutation = useCreateAccount()
 
   return (
     <nav className="flex-1 p-4 overflow-y-auto">
@@ -50,10 +49,7 @@ export const SidebarList = ({setIsOpen}: {setIsOpen?: (open: boolean) => void}) 
           <span className="font-medium">{account.name}</span>
         </Link>
       ))}
-
-      <Button>
-        Add Account
-      </Button>
+      <AddAccount />
     </nav>
   )
 }
