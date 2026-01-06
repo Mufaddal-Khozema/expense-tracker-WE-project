@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import logo from '../logo.svg'
-import {flexRender, getCoreRowModel, getExpandedRowModel, useReactTable, type Row} from '@tanstack/react-table'
+import {flexRender, getCoreRowModel, getExpandedRowModel, useReactTable, type ColumnDef, type Row} from '@tanstack/react-table'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { useMemo, useReducer, useState, type CSSProperties } from 'react'
 import { AddCategory } from '@/components/category/add-category'
 import { useCreateCategory } from '@/hooks/use-create-category'
@@ -16,10 +16,23 @@ import type { Category } from '@/api/categories'
 import { closestCenter, DndContext, KeyboardSensor, MouseSensor, TouchSensor, useSensor, useSensors, type DragEndEvent, type UniqueIdentifier } from '@dnd-kit/core'
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useReorderCategory } from '@/hooks/use-reorder-category'
+import { Button } from '@/components/ui/button'
 
 export const Route = createFileRoute('/')({
   component: App,
 })
+
+const RowDragHandleCell = ({ rowId }: { rowId: string }) => {
+  const { attributes, listeners } = useSortable({
+    id: rowId,
+  })
+  return (
+    // Alternatively, you could set these attributes on the rows themselves
+    <button {...attributes} {...listeners}>
+      🟰
+    </button>
+  )
+}
 
 function App() {
   const {data: categories, isLoading, refetch} = useCategories()
@@ -27,9 +40,14 @@ function App() {
   const updateCategoryMutation = useUpdateCategory()
   const reorderCategoryMutation = useReorderCategory()
 
-  const table = useReactTable({
-    data: categories??[],
-    columns: [
+
+  const columns: ColumnDef<Category>[] = useMemo(() => ([
+      {
+        id: 'drag-handle',
+        header: 'Move',
+        cell: ({ row }) => <RowDragHandleCell rowId={row.id} />,
+        size: 60,
+      },
       {
         accessorKey: 'firstName',
         header: ({ table }) => (
@@ -85,7 +103,25 @@ function App() {
         footer: (props) => props.column.id,
         size: 120, // small
       },
-      { accessorKey: "name", size: 400 },
+      {
+        accessorKey: "name",
+        size: 400,
+        cell: ({ row }) => {
+          const name = row.original.name
+
+          return (
+            <div className="group flex items-center gap-2">
+              <span>{name}</span>
+
+              {/* Hover-only button */}
+              <AddCategory 
+                parentId={row.original.id}
+                trigger={<Plus className="text-white" />} 
+                className={`opacity-0 group-hover:opacity-100 transition-opacity text-xs text-white text-muted-foreground hover:text-primary rounded-full h-6 w-5`} />
+            </div>
+          )
+        },
+      },
       { 
         accessorKey: "amount", 
         cell: ({ cell, row }) => (
@@ -99,15 +135,20 @@ function App() {
         ),
         size: 400 
       }
-    ],
+  ]), [])
+
+  const table = useReactTable({
+    data: categories??[],
+    columns,
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
     getSubRows: (row) => row.categories,
+    getRowId: (row) => row.id
   });
 
   // Row Component
   const DraggableRow = ({ row }: { row: Row<Category> }) => {
-    const { transform, transition, setNodeRef, isDragging, attributes, listeners } = useSortable({
+    const { transform, transition, setNodeRef, isDragging } = useSortable({
       id: row.original.id,
     })
 
@@ -120,7 +161,7 @@ function App() {
     }
     return (
       // connect row ref to dnd-kit, apply important styles
-      <TableRow ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <TableRow ref={setNodeRef} style={style}>
         {row.getVisibleCells().map((cell) => (
           <TableCell key={cell.id} style={{ width: cell.column.getSize() }}>
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -170,7 +211,7 @@ function App() {
     <main className="w-full h-full overflow-hidden">
       <section className="p-5 space-y-5">
         <h1 className="text-3xl">Categories</h1>
-        <AddCategory />
+        <AddCategory trigger={"Add Category"} />
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

@@ -4,6 +4,7 @@ export type Category = {
   id: number;
   name: string;
   parent_id: number | null;
+  categories: Category[]
 };
 
 export function createCategory(input: {

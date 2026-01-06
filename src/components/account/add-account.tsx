@@ -17,8 +17,7 @@ import * as z from 'zod'
 const schema = z.object({
   name: z
     .string(),
-  balance: z
-    .number()
+  balance: z.number()
 })
 
 export const AddAccount = () => {
@@ -32,7 +31,7 @@ export const AddAccount = () => {
       onSubmit: schema, 
     },
     onSubmit: (values) => {
-      createAccountMutation.mutate(values.value)
+      createAccountMutation.mutate({type: "", ...values.value})
     },
   })
 	return (<>
@@ -53,56 +52,75 @@ export const AddAccount = () => {
                 form.handleSubmit()
               }}
             >
-              <form.Field
-                name="name"
-                children={(field) => {
-                  const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                  return (
-                    <Field>
-                      <FieldLabel htmlFor="name" className="block text-sm font-medium text-gray-700">
-                        Name
-                      </FieldLabel>
-                      <Input
-                        name={field.name}
-                        id={field.name}
-                        value={field.state.value}
-                        onBlur={field.handleBlur}
-                        onChange={(e) => field.handleChange(e.target.value)}
-                        aria-invalid={isInvalid}
-                        placeholder="Cash, Savings, etc"
-                        autoComplete="off"
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                      />
-                      {isInvalid && (
-                        <FieldError errors={field.state.meta.errors} />
-                      )}
-                  </Field>
-                  )
-                }}
-              />
               <FieldGroup>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Balance
-              </label>
-              <div className="mt-1">
-                <Input
-                  type="number"
-                  name="balance"
-                  id="balance"
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                <form.Field
+                  name="name"
+                  children={(field) => {
+                    const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                    return (
+                      <Field>
+                        <FieldLabel htmlFor="name" className="block text-sm font-medium text-gray-700">
+                          Name
+                        </FieldLabel>
+                        <Input
+                          name={field.name}
+                          id={field.name}
+                          value={field.state.value}
+                          onBlur={field.handleBlur}
+                          onChange={(e) => field.handleChange(e.target.value)}
+                          aria-invalid={isInvalid}
+                          placeholder="Cash, Savings, etc"
+                          autoComplete="off"
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        />
+                        {isInvalid && (
+                          <FieldError errors={field.state.meta.errors} />
+                        )}
+                    </Field>
+                    )
+                  }}
                 />
-              </div>
+
+                <form.Field
+                  name="balance"
+                  children={(field) => {
+                    const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                    return (
+                      <Field>
+                        <FieldLabel htmlFor="balance" className="block text-sm font-medium text-gray-700">
+                          Balance
+                        </FieldLabel>
+                        <Input
+                          type="number"
+                          name={field.name}
+                          value={String(field.state.value)}
+                          onBlur={field.handleBlur}
+                          onChange={(e) => field.handleChange(Number(e.target.value))}
+                          aria-invalid={isInvalid}
+                          placeholder="50000"
+                          id="balance"
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        />
+                        {isInvalid && (
+                          <FieldError errors={field.state.meta.errors} />
+                        )}
+                    </Field>
+                    )
+                  }}
+                />
               </FieldGroup>
             </form>
           </DialogDescription>
         </DialogHeader>
-          <DialogFooter>
-            <div className="mt-5 sm:mt-6 sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense">
-              <Button type="submit" className="w-full">
+        <DialogFooter>
+          <div className="mt-5 sm:mt-6 sm:gap-3 sm:grid-flow-row-dense">
+            <Field>
+              <Button type="submit" className="w-full" form="add-account-form">
                 Add Account
               </Button>
-            </div>
-          </DialogFooter>
+            </Field>
+          </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog> 
     </>

@@ -244,6 +244,8 @@ type Category struct {
 	CreatedAt string   `db:"created_at" json:"created_at"`
 	UpdatedAt string   `db:"updated_at" json:"updated_at"`
 	IsDeleted string   `db:"is_deleted" json:"is_deleted"`
+
+	Categories []*Category `json:"categories,omitempty"`
 }
 
 // CategoryRequest represents the JSON request for creating a category
@@ -275,6 +277,32 @@ type UpdateAccountRequest struct {
 	Name     string `json:"name"`
 	Amount   *float64 `json:"amount"`
 	ParentID *int64 `json:"parent_id,omitempty"`
+}
+
+// Account represents an account in the database
+type Account struct {
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	Type      string  `json:"type"`
+	Balance   float64 `json:"balance"`
+	CreatedAt string  `db:"created_at" json:"created_at"`
+	UpdatedAt string  `db:"updated_at" json:"updated_at"`
+	IsDeleted int     `db:"is_deleted" json:"is_deleted"`
+}
+
+// Transaction represents a transaction in the database
+type Transaction struct {
+	ID                int64    `json:"id"`
+	AccountID         int64    `db:"account_id" json:"account_id"`
+	CategoryID        *int64   `db:"category_id" json:"category_id,omitempty"`
+	Payee             *string  `json:"payee,omitempty"`
+	Memo              *string  `json:"memo,omitempty"`
+	Amount            float64  `json:"amount"`
+	Date              string   `json:"date"`
+	TransferAccountID *int64   `db:"transfer_account_id" json:"transfer_account_id,omitempty"`
+	CreatedAt         string   `db:"created_at" json:"created_at"`
+	UpdatedAt         string   `db:"updated_at" json:"updated_at"`
+	IsDeleted         int      `db:"is_deleted" json:"is_deleted"`
 }
 
 type MethodHandler map[string]http.HandlerFunc
@@ -320,6 +348,34 @@ func HandleCreate[T any](
 		"id":     id,
 	})
 }
+
+func BuildCategoryTree(categories []Category) []*Category {
+	byID := make(map[int64]*Category)
+	var roots []*Category
+
+	// First pass: index categories and init children slice
+	for i := range categories {
+		categories[i].Categories = []*Category{}
+		byID[categories[i].ID] = &categories[i]
+	}
+
+	// Second pass: attach to parent or mark as root
+	for i := range categories {
+		cat := &categories[i]
+
+		if cat.ParentID != nil {
+			parent, ok := byID[*cat.ParentID]
+			if ok {
+				parent.Categories = append(parent.Categories, cat)
+			}
+		} else {
+			roots = append(roots, cat)
+		}
+	}
+
+	return roots
+}
+
 
 // InsertCategory inserts a new category into the database
 func InsertCategory(name string, parentID *int64) (int64, error) {
@@ -382,7 +438,7 @@ func UpdateCategory(id int64, name string, amount *float64, parentID *int64) err
 func CreateAccount(name string, balance *float64) (int64, error) {
 	var id int64
 
-	result, err := db.Exec("INSERT INTO accounts (name, balance) VALUES (?, ?)", name, *balance)
+	result, err := db.Exec("INSERT INTO accounts (name, balance, type) VALUES (?, ?, ?)", name, *balance, "")
 	if err != nil {
 		return 0, err
 	}
@@ -449,11 +505,6 @@ func HandleUpdateCategoryByID(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetCategories handles GET /categories requests
 func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	catRepo := NewRepository[Category](db, "categories", "id")
 	categories, err := catRepo.List(
         WithOrderBy("sort_order"),
@@ -463,9 +514,10 @@ func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+	tree := BuildCategoryTree(categories)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(categories)
+	json.NewEncoder(w).Encode(tree)
 }
 
 func ReorderCategoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -511,6 +563,20 @@ func HandleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			return CreateAccount(r.Name, r.Balance)
 		},
 	)
+}
+
+// HandleGetCategories handles GET /categories requests
+func HandleGetAccounts(w http.ResponseWriter, r *http.Request) {
+	accRepo := NewRepository[Account](db, "accounts", "id")
+	accounts, err := accRepo.List()
+	if err != nil {
+		log.Printf("[DB][ERROR] %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(accounts)
 }
 
 // LoggingMiddleware wraps handlers to log requests
@@ -620,7 +686,7 @@ func main() {
 	// Set up HTTP routes
 	mux.Handle("/accounts", Methods(MethodHandler{
 		http.MethodPost: HandleCreateAccount,
-		//http.MethodGet: HandleGetAccount,
+		http.MethodGet: HandleGetAccounts,
 	}))
 
 	//mux.Handle("/accounts/{id}", Methods(MethodHandler{
