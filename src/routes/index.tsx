@@ -18,6 +18,8 @@ import { useReorderCategory } from '@/hooks/use-reorder-category'
 import { Button } from '@/components/ui/button'
 import { AddCategory } from '@/components/category/add-category'
 import { cn, formatCurrency } from '@/lib/utils'
+import { Card, CardContent } from '@/components/ui/card'
+import { useAccounts } from '@/hooks/use-accounts'
 
 export const Route = createFileRoute('/')({
   component: App,
@@ -37,6 +39,7 @@ const RowDragHandleCell = ({ rowId }: { rowId: string }) => {
 
 function App() {
   const {data: categories, isLoading, refetch} = useCategories()
+  const {data: accounts} = useAccounts()
   const createCategoryMutation = useCreateCategory()
   const updateCategoryMutation = useUpdateCategory()
   const reorderCategoryMutation = useReorderCategory()
@@ -219,7 +222,15 @@ function App() {
     >
     <main className="w-full h-full overflow-hidden">
       <section className="p-5 space-y-5">
-        <h1 className="text-3xl">Categories</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl">Categories</h1>
+          <Card className="p-3 w-48">
+            <CardContent className="flex flex-col p-0">
+              <span className="text-right">{formatCurrency((accounts??[]).reduce((acc, account) => acc + (account.balance??0), 0) - (categories??[]).reduce((acc, cat) => acc + (cat.amount??0), 0))}</span>
+              <span className="text-xs">Able to assign</span>
+            </CardContent>
+          </Card>
+        </div>
         <AddCategory trigger={<Button>Add Category</Button>} />
         <Table>
           <TableHeader>
