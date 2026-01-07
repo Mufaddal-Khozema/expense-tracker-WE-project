@@ -291,6 +291,22 @@ type Account struct {
 }
 
 // Transaction represents a transaction in the database
+type TransactionWithRelations struct {
+	ID                int64    `json:"id"`
+	AccountID         int64    `db:"account_id" json:"account_id"`
+	AccountName       string   `db:"account_name" json:"account_name"`
+	CategoryID        *int64   `db:"category_id" json:"category_id,omitempty"`
+	CategoryName      *string  `db:"category_name" json:"category_name,omitempty"`
+	Payee             *string  `json:"payee,omitempty"`
+	Memo              *string  `json:"memo,omitempty"`
+	Amount            float64  `json:"amount"`
+	Date              string   `json:"date"`
+	TransferAccountID *int64   `db:"transfer_account_id" json:"transfer_account_id,omitempty"`
+	CreatedAt         string   `db:"created_at" json:"created_at"`
+	UpdatedAt         string   `db:"updated_at" json:"updated_at"`
+	IsDeleted         int      `db:"is_deleted" json:"is_deleted"`
+}
+
 type Transaction struct {
 	ID                int64    `json:"id"`
 	AccountID         int64    `db:"account_id" json:"account_id"`
@@ -754,8 +770,17 @@ func HandleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleGetTransaction(w http.ResponseWriter, r *http.Request) {
-	txRepo := NewRepository[Transaction](db, "transactions", "id")
-	transactions, err := txRepo.List()
+	var txs []TransactionWithRelations
+
+	err := db.Select(&txs, `
+		SELECT
+			t.*,
+			a.name AS account_name,
+			c.name AS category_name
+		FROM transactions t
+		JOIN accounts a ON a.id = t.account_id
+		LEFT JOIN categories c ON c.id = t.category_id
+	`)
 	if err != nil {
 		log.Printf("[DB][ERROR] %v\n", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -763,7 +788,7 @@ func HandleGetTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(transactions)
+	json.NewEncoder(w).Encode(txs)
 }
 
 // LoggingMiddleware wraps handlers to log requests

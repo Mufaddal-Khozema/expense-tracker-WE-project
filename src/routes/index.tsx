@@ -89,7 +89,7 @@ function App() {
       },
       {
         accessorKey: "name",
-	header: "Name",
+        header: "Name",
         size: 400,
         cell: ({ row }) => {
           const name = row.original.name

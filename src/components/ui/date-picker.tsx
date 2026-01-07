@@ -10,9 +10,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import type { DayPickerProps } from "react-day-picker"
+import type { DayPickerSingleProps } from "react-day-picker"
 
-export function DatePicker(props: DayPickerProps) {
+export function DatePicker(props: DayPickerSingleProps) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -23,7 +23,7 @@ export function DatePicker(props: DayPickerProps) {
           id="date"
           className="w-48 justify-between font-normal"
         >
-          {props.date ? props.date.toLocaleDateString() : "Select date"}
+          {props.selected && props.selected instanceof Date ? props.selected.toLocaleDateString() : "Select date"}
           <ChevronDownIcon />
         </Button>
       </PopoverTrigger>

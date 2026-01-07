@@ -30,22 +30,21 @@ const initialPlaceholder: Transaction = {
 const SubComponent = ({ 
   row, 
   setIsAdding, 
-  placeholder
+  placeholder,
+  refetch
 }: { 
   row: Row<Transaction> 
   setIsAdding: React.Dispatch<React.SetStateAction<boolean>>
   placeholder: Transaction
+  refetch: () => {}
 }) => {
   const createTransaction = useCreateTransaction();
   const onSave = () => {
     createTransaction.mutate(placeholder)
+    refetch()
   }
 
   return (
-    <>
-    <pre style={{ fontSize: '10px' }}>
-      <code>{JSON.stringify(placeholder, null, 2)}</code>
-    </pre>
     <div className="flex justify-end gap-2">
       <Button
         onClick={onSave}
@@ -63,7 +62,6 @@ const SubComponent = ({
         Cancel
       </Button>
     </div>
-    </>
   )
 }
 
@@ -80,16 +78,16 @@ function TransactionPage() {
 
   const columns: ColumnDef<Transaction>[] = useMemo(() => ([
       {
-        accessorKey: 'account',
+        accessorKey: 'account_id',
         header: 'ACCOUNT',
         cell: ({ row, cell }) => {
           const s = table.options.meta
-          if (!s?.isAdding || row.original.id != 0) return cell.getValue() as string
+          if (!s?.isAdding || row.original.id != 0) return (accounts??[]).find(account => account.id === cell.getValue())?.name
 
           return (
             <Select
               value={String(s?.placeholder?.account_id)}
-              onValueChange={(value) => setPlaceholderValue("account_id", value)}
+              onValueChange={(value) => setPlaceholderValue("account_id", Number(value))}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select account" />
@@ -143,12 +141,11 @@ function TransactionPage() {
         size: 60,
       },
       {
-        accessorKey: 'category',
+        accessorKey: 'category_id',
         header: 'CATEGORY',
         cell: ({ row, cell }) => {
           const s = table.options.meta
-          if (!s?.isAdding || row.original.id != 0) return cell.getValue() as string
-
+          if (!s?.isAdding || row.original.id != 0) return (categories??[]).flatMap(category => category.categories??[]).find(category => category.id === cell.getValue())?.name
           return (
             <Select
               value={String(s?.placeholder?.category_id)}
@@ -158,10 +155,10 @@ function TransactionPage() {
                 <SelectValue placeholder="Select category" />
               </SelectTrigger>
               <SelectContent>
-                {s?.categories?.map(category => (
+                {(s?.categories??[]).map(category => (
                   <SelectGroup>
                     <SelectLabel>{category.name}</SelectLabel>
-                    {category.categories.map(category => ( 
+                    {(category.categories??[]).map(category => ( 
                       <SelectItem key={category.id} value={String(category.id)}>
                         {category.name}
                       </SelectItem>
@@ -282,6 +279,7 @@ function TransactionPage() {
                         row={row} 
                         setIsAdding={setIsAdding} 
                         placeholder={placeholder}
+                        refetch={refetch}
                       />
                     </TableCell>
                   </TableRow>

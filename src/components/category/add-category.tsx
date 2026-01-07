@@ -6,6 +6,7 @@ import { useCreateCategory } from "@/hooks/use-create-category"
 import { initializeContext } from "zod/v4/core"
 import { cn } from "@/lib/utils"
 import { useDeleteCategory } from "@/hooks/use-delete-category"
+import { useUpdateCategory } from "@/hooks/use-update-category"
 
 export const AddCategory = ({
   mode = "add",
@@ -24,19 +25,32 @@ export const AddCategory = ({
   const [open, setOpen] = useState(false)
   const createCategory = useCreateCategory()
   const deleteCategory = useDeleteCategory()
+  const updateCategoryMutation = useUpdateCategory()
 
   const onSave = () => {
     if (!name.trim()) return
 
-    createCategory.mutate(
-      { name, parent_id: parentId },
-      {
-        onSuccess: () => {
-          setName("")
-          setOpen(false)
-        },
-      }
-    )
+    if (mode === "edit") {
+      updateCategoryMutation.mutate(
+        { id, name },
+        {
+          onSuccess: () => {
+            setName("")
+            setOpen(false)
+          },
+        }
+      )
+    } else {
+      createCategory.mutate(
+        { name, parent_id: parentId },
+        {
+          onSuccess: () => {
+            setName("")
+            setOpen(false)
+          },
+        }
+      )
+    }
   }
 
   return (
