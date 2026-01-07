@@ -112,7 +112,7 @@ func (r *Repository[T]) Update(id int64, updates map[string]interface{}) error {
 }
 
 // SoftDelete marks a row as deleted
-func (r *Repository[T]) SoftDelete(id int64) error {
+func (r *Repository[T]) Delete(id int64) error {
 	query := fmt.Sprintf("UPDATE %s SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE %s = ?", r.tableName, r.idColumn)
 	_, err := r.db.Exec(query, id)
 	return err
@@ -179,11 +179,11 @@ func (r *Repository[T]) List(opts ...ListOption) ([]T, error) {
         query += fmt.Sprintf(" OFFSET %d", *o.offset)
     }
 
-	err := r.db.Select(&items, query, o.args...)
-	if err != nil {
-		return nil, err
-	}
-	return items, nil
+    err := r.db.Select(&items, query, o.args...)
+    if err != nil {
+        return nil, err
+    }
+    return items, nil
 }
 
 func (r *Repository[T]) Reorder(id int64, oldIndex, newIndex int) error {
@@ -305,6 +305,15 @@ type Transaction struct {
 	IsDeleted         int      `db:"is_deleted" json:"is_deleted"`
 }
 
+type CreaateTransactionRequest struct {
+	AccountID         int64    `db:"account_id" json:"account_id"`
+	CategoryID        *int64   `db:"category_id" json:"category_id,omitempty"`
+	Payee             *string  `json:"payee,omitempty"`
+	Memo              *string  `json:"memo,omitempty"`
+	Amount            float64  `json:"amount"`
+	Date              string   `json:"date"`
+}
+
 type MethodHandler map[string]http.HandlerFunc
 
 type CreateFunc[T any] func(req T) (int64, error)
@@ -377,6 +386,25 @@ func BuildCategoryTree(categories []Category) []*Category {
 }
 
 
+func SumCategoryAmounts(cat *Category) float64 {
+	var total float64
+
+	for _, child := range cat.Categories {
+		total += SumCategoryAmounts(child)
+	}
+
+	// If this category has children, override its amount
+	if len(cat.Categories) > 0 {
+		cat.Amount = &total
+	}
+
+    if (cat.Amount == nil) {
+        return 0
+    }
+	return *cat.Amount
+}
+
+
 // InsertCategory inserts a new category into the database
 func InsertCategory(name string, parentID *int64) (int64, error) {
 	var id int64
@@ -435,6 +463,18 @@ func UpdateCategory(id int64, name string, amount *float64, parentID *int64) err
 	return nil
 }
 
+func DeleteCategory(id int64) error {
+	catRepo := NewRepository[Category](db, "categories", "id")
+
+	err := catRepo.Delete(id)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DB][OK] delete_category(id=%d)\n", id)
+	return nil
+}
+
 func CreateAccount(name string, balance *float64) (int64, error) {
 	var id int64
 
@@ -449,6 +489,77 @@ func CreateAccount(name string, balance *float64) (int64, error) {
 
 	log.Printf("[DB] insert_account(name=\"%s\", balance=%v)\n", name, balance)
 	log.Printf("[DB][OK] account inserted with id=%d\n", id)
+	return id, nil
+}
+
+
+func CreateTransaction(
+    AccountID int64, 
+    CategoryID *int64,
+    Payee *string,
+    Memo *string,    
+    Amount float64,
+    Date string,      
+) (int64, error) {
+    tx, err := db.Begin()
+    if err != nil {
+        return 0, err
+    }
+    defer func() {
+        tx.Rollback()
+    }()
+	var id int64
+
+	result, err := 
+        tx.Exec("INSERT INTO transactions (account_id, category_id, payee, memo, amount, date) VALUES (?, ?, ?, ?, ?, ?)", 
+            AccountID, 
+            CategoryID,
+            Payee,
+            Memo,
+            Amount,
+            Date,
+        )
+	if err != nil {
+		return 0, err
+	}
+	id, err = result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	// 2️⃣ Deduct amount from account balance
+	_, err = tx.Exec(
+		`UPDATE accounts SET balance = balance - ? WHERE id = ?`,
+		Amount,
+		AccountID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+    _, err = tx.Exec(
+        `UPDATE categories SET amount = amount - ? WHERE id = ?`,
+        Amount,
+        *CategoryID,
+    )
+    if err != nil {
+        return 0, err
+    }
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	log.Printf("[DB] insert_transaction(account_id=%d, category_id=%v, payee=%s, memo=%s, amount=%v, date=%s)\n", 
+        AccountID, 
+        CategoryID,
+        Payee,
+        Memo,
+        Amount,
+        Date,
+    )
+	log.Printf("[DB][OK] transaction inserted with id=%d\n", id)
 	return id, nil
 }
 
@@ -503,6 +614,26 @@ func HandleUpdateCategoryByID(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func HandleDeleteCategory(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := DeleteCategory(id); err != nil {
+		log.Printf("[DB][ERROR] %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "OK",
+	})
+}
+
 // HandleGetCategories handles GET /categories requests
 func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
 	catRepo := NewRepository[Category](db, "categories", "id")
@@ -514,8 +645,21 @@ func HandleGetCategories(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-	tree := BuildCategoryTree(categories)
 
+    if categories == nil {
+        categories = []Category{}
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(categories)
+        log.Printf("[DB][OK] get_categories cat=%v\n", categories)
+        return
+    }
+
+	tree := BuildCategoryTree(categories)
+    for _, root := range tree {
+        SumCategoryAmounts(root)
+    }
+
+    log.Printf("[DB][OK] get_categories cat=%v\n", tree)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tree)
 }
@@ -579,6 +723,49 @@ func HandleGetAccounts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(accounts)
 }
 
+func HandleCreateTransaction(w http.ResponseWriter, r *http.Request) {
+	var req CreaateTransactionRequest
+
+	HandleCreate(
+		w,
+		r,
+		&req,
+		func(r CreaateTransactionRequest) error {
+			if r.AccountID == 0 {
+				return errors.New("account id is required")
+			}
+
+			if r.CategoryID == nil {
+				return errors.New("category id is required")
+			}
+			return nil
+		},
+		func(r CreaateTransactionRequest) (int64, error) {
+			return CreateTransaction(
+                r.AccountID,
+                r.CategoryID,
+                r.Payee,            
+                r.Memo,
+                r.Amount,
+                r.Date,
+            )
+		},
+	)
+}
+
+func HandleGetTransaction(w http.ResponseWriter, r *http.Request) {
+	txRepo := NewRepository[Transaction](db, "transactions", "id")
+	transactions, err := txRepo.List()
+	if err != nil {
+		log.Printf("[DB][ERROR] %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(transactions)
+}
+
 // LoggingMiddleware wraps handlers to log requests
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -605,7 +792,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 func CORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -677,6 +864,7 @@ func main() {
 	mux.Handle("/categories/{id}", Methods(MethodHandler{
 		http.MethodPut: HandleUpdateCategoryByID,
 		http.MethodPost: HandleCreateCategory,
+		http.MethodDelete: HandleDeleteCategory,
 	}))
 
 	mux.Handle("/categories/reorder/{id}", Methods(MethodHandler{
@@ -692,6 +880,11 @@ func main() {
 	//mux.Handle("/accounts/{id}", Methods(MethodHandler{
 	//	http.MethodPut: HandleUpdateAccount,
 	//}))
+
+	mux.Handle("/transactions", Methods(MethodHandler{
+		http.MethodPost: HandleCreateTransaction,
+		http.MethodGet: HandleGetTransaction,
+	}))
 
 	// Handle 404 for all other routes
 	mux.Handle("/", http.NotFoundHandler())

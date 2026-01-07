@@ -5,6 +5,7 @@ import { ClipboardType, Home, Menu, Network, Table, X } from 'lucide-react'
 import { useAccounts } from '@/hooks/use-accounts'
 import { useCreateAccount } from '@/hooks/use-create-account'
 import { AddAccount } from './account/add-account'
+import { formatCurrency } from '@/lib/utils'
 
 export default function Header() {
   const [isOpen, setIsOpen] = useState(false)
@@ -35,6 +36,16 @@ export const SidebarList = ({setIsOpen}: {setIsOpen?: (open: boolean) => void}) 
 
   return (
     <nav className="flex-1 p-4 overflow-y-auto">
+      <Link
+        to="/transactions"
+        className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-900 transition-colors mb-2"
+        activeProps={{
+          className:
+            'flex justify-between items-center gap-3 p-3 rounded-lg bg-gray-800 hover:bg-gray-900 transition-colors mb-2',
+        }}
+      >
+        <span className="font-medium">Transaction</span>
+      </Link>
       {accounts?.map(account => (
         <Link
           to="/"
@@ -42,11 +53,11 @@ export const SidebarList = ({setIsOpen}: {setIsOpen?: (open: boolean) => void}) 
           className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-900 transition-colors mb-2"
           activeProps={{
             className:
-              'flex items-center gap-3 p-3 rounded-lg bg-gray-800 hover:bg-gray-900 transition-colors mb-2',
+              'flex justify-between items-center gap-3 p-3 rounded-lg bg-gray-800 hover:bg-gray-900 transition-colors mb-2',
           }}
         >
-          <Home size={20} />
           <span className="font-medium">{account.name}</span>
+          <span className="font-medium">{formatCurrency(account.balance??0)}</span>
         </Link>
       ))}
       <AddAccount />

@@ -2,9 +2,8 @@ import { createFileRoute } from '@tanstack/react-router'
 import logo from '../logo.svg'
 import {flexRender, getCoreRowModel, getExpandedRowModel, useReactTable, type ColumnDef, type Row} from '@tanstack/react-table'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Grip, Plus } from 'lucide-react'
 import { useMemo, useReducer, useState, type CSSProperties } from 'react'
-import { AddCategory } from '@/components/category/add-category'
 import { useCreateCategory } from '@/hooks/use-create-category'
 import { useCategories } from '@/hooks/use-categories'
 import { useUpdateCategory } from '@/hooks/use-update-category'
@@ -17,6 +16,8 @@ import { closestCenter, DndContext, KeyboardSensor, MouseSensor, TouchSensor, us
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useReorderCategory } from '@/hooks/use-reorder-category'
 import { Button } from '@/components/ui/button'
+import { AddCategory } from '@/components/category/add-category'
+import { cn, formatCurrency } from '@/lib/utils'
 
 export const Route = createFileRoute('/')({
   component: App,
@@ -29,7 +30,7 @@ const RowDragHandleCell = ({ rowId }: { rowId: string }) => {
   return (
     // Alternatively, you could set these attributes on the rows themselves
     <button {...attributes} {...listeners}>
-      🟰
+      <Grip className="text-gray-500" />
     </button>
   )
 }
@@ -44,48 +45,28 @@ function App() {
   const columns: ColumnDef<Category>[] = useMemo(() => ([
       {
         id: 'drag-handle',
-        header: 'Move',
+        header: '',
         cell: ({ row }) => <RowDragHandleCell rowId={row.id} />,
         size: 60,
       },
       {
         accessorKey: 'firstName',
         header: ({ table }) => (
-          <>
-            <input
-              type="checkbox"
-              {...{
-                checked: table.getIsAllRowsSelected(),
-                onChange: table.getToggleAllRowsSelectedHandler(),
-              }}
-            />{' '}
-            <button
-              {...{
-                onClick: table.getToggleAllRowsExpandedHandler(),
-              }}
-            >
-              {table.getIsAllRowsExpanded() ? <ChevronDown className="w-6 h-6" /> : <ChevronRight className="w-6 h-6" />}
-            </button>{' '}
-          </>
+          <button
+            {...{
+              onClick: table.getToggleAllRowsExpandedHandler(),
+            }}
+          >
+            {table.getIsAllRowsExpanded() ? <ChevronDown className="w-6 h-6" /> : <ChevronRight className="w-6 h-6" />}
+          </button>
         ),
         cell: ({ row, getValue }) => (
           <div
             style={{
-              // Since rows are flattened by default,
-              // we can use the row.depth property
-              // and paddingLeft to visually indicate the depth
-              // of the row
               paddingLeft: `${row.depth * 2}rem`,
             }}
           >
             <div>
-              <input
-                type="checkbox"
-                {...{
-                  checked: row.getIsSelected(),
-                  onChange: row.getToggleSelectedHandler(),
-                }}
-              />{' '}
               {row.getCanExpand() && (
                 <button
                   {...{
@@ -105,34 +86,62 @@ function App() {
       },
       {
         accessorKey: "name",
+	header: "Name",
         size: 400,
         cell: ({ row }) => {
           const name = row.original.name
 
           return (
             <div className="group flex items-center gap-2">
-              <span>{name}</span>
-
-              {/* Hover-only button */}
               <AddCategory 
+                name={name}
+                mode="edit"
+                id={row.original.id}
+                trigger={
+                  <Button 
+                    variant="ghost"
+                    className="font-normal hover:underline hover:bg-transparent px-0"
+                    //className={`opacity-0 group-hover:opacity-100 transition-opacity 
+                    //  text-xs text-white text-muted-foreground hover:text-primary 
+                    //  rounded-full h-6 w-4`}
+                  >
+                    {name}
+                  </Button>
+                } 
+             />
+
+              {row.depth == 0 && <AddCategory 
                 parentId={row.original.id}
-                trigger={<Plus className="text-white" />} 
-                className={`opacity-0 group-hover:opacity-100 transition-opacity text-xs text-white text-muted-foreground hover:text-primary rounded-full h-6 w-5`} />
+                trigger={
+                  <Button 
+                    className={`opacity-0 group-hover:opacity-100 transition-opacity 
+                      text-xs text-white text-muted-foreground hover:text-primary 
+                      rounded-full h-6 w-4`}
+                  >
+                    <Plus className="text-white" size={4} />
+                  </Button>
+                } 
+               />}
             </div>
           )
         },
       },
       { 
         accessorKey: "amount", 
+        header: "Amount",
         cell: ({ cell, row }) => (
-          <EditableField 
-            onBlur={(value) => updateCategoryMutation.mutate({ 
-              id: row.original.id, 
-              amount: Number(value)
-            })}
-            value={cell.getValue()}
-          />
-        ),
+          row.depth == 0 ? (
+            <span>{formatCurrency(cell.getValue() as number)}</span>
+          ) : (
+            <EditableField 
+              onBlur={(value) => updateCategoryMutation.mutate({ 
+                id: row.original.id, 
+                amount: Number(value)
+              })}
+              value={cell.getValue()}
+            />
+            )
+          ),
         size: 400 
       }
   ]), [])
@@ -161,7 +170,7 @@ function App() {
     }
     return (
       // connect row ref to dnd-kit, apply important styles
-      <TableRow ref={setNodeRef} style={style}>
+      <TableRow ref={setNodeRef} style={style} className={cn(row.depth == 0 ? 'bg-gray-100' : 'bg-white')}>
         {row.getVisibleCells().map((cell) => (
           <TableCell key={cell.id} style={{ width: cell.column.getSize() }}>
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -211,7 +220,7 @@ function App() {
     <main className="w-full h-full overflow-hidden">
       <section className="p-5 space-y-5">
         <h1 className="text-3xl">Categories</h1>
-        <AddCategory trigger={"Add Category"} />
+        <AddCategory trigger={<Button>Add Category</Button>} />
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

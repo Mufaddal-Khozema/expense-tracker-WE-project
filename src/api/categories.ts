@@ -43,3 +43,11 @@ export function reorderCategory(input: {
     body: JSON.stringify(input),
   });
 }
+
+export function deleteCategory(input: {
+  id: number;
+}) {
+  return api<Category>(`/categories/${input.id}`, {
+    method: "DELETE",
+  });
+}
